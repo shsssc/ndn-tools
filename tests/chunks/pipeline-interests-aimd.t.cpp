@@ -589,6 +589,58 @@ BOOST_AUTO_TEST_CASE(StopsWhenFileSizeLessThanChunkSize)
   BOOST_CHECK_EQUAL(face.getNPendingInterests(), 0);
 }
 
+BOOST_AUTO_TEST_CASE(OutstandingPacketAtTimeoutIsTimedOutLater)
+{
+  // If an interest is pending during a window decrease,
+  // it should not triger another window decrease when it times out.
+  // This test emulates a network where
+  // RTT=20ms & Transmission time = 1ms.
+
+  //adding small sample to RTT estimator. This should set rto = 200ms
+  rttEstimator.addMeasurement(time::nanoseconds(1));
+  BOOST_CHECK_EQUAL(rttEstimator.getEstimatedRto(), time::milliseconds(200));
+
+  nDataSegments = 300;
+
+  pipeline->m_ssthresh = 0;
+  pipeline->m_cwnd = 20;
+
+  run(name);
+
+  advanceClocks(time::nanoseconds(1));
+  BOOST_CHECK_EQUAL(face.sentInterests.size(), 20);
+  advanceClocks(time::milliseconds(20));
+
+  // Segment 1 is lost. Receive segment 0 & segments 2-99
+  face.receive(*makeDataWithSegment(0));
+  advanceClocks(time::milliseconds(1));
+
+  for (uint64_t i = 2; i <= 99; ++i) {
+    face.receive(*makeDataWithSegment(i));
+    advanceClocks(time::milliseconds(1));
+  }
+
+  // Segment 100 is lost. Receive segment 100 to 181
+  for (uint64_t i = 101; i <= 181; ++i) {
+    face.receive(*makeDataWithSegment(i));
+    advanceClocks(time::milliseconds(1));
+  }
+
+  // 200ms passed after sending segment 1, check for timeout
+  BOOST_CHECK(pipeline->m_cwnd > 27./2 && pipeline->m_cwnd < 28./2);
+  BOOST_CHECK_EQUAL(pipeline->m_nTimeouts, 1);
+  BOOST_CHECK_EQUAL(pipeline->m_nLossDecr, 1);
+
+  // Receive segment 182 to 300.
+  for (uint64_t i = 182; i <= 300; ++i) {
+    face.receive(*makeDataWithSegment(i));
+    advanceClocks(time::milliseconds(1));
+  }
+  // The second packet should timeout now.
+  BOOST_CHECK_EQUAL(pipeline->m_nTimeouts, 2);
+  // This timeout shoud not triger window decrease
+  BOOST_CHECK_EQUAL(pipeline->m_nLossDecr, 1);
+}
 
 BOOST_AUTO_TEST_SUITE_END() // TestPipelineInterestsAimd
 BOOST_AUTO_TEST_SUITE_END() // Chunks

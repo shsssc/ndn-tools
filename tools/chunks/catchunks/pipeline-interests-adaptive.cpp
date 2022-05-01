@@ -83,6 +83,7 @@ PipelineInterestsAdaptive::checkRto()
     return;
 
   bool hasTimeout = false;
+  uint64_t highTimeoutSeg = 0;
 
   for (auto& entry : m_segmentInfo) {
     SegmentInfo& segInfo = entry.second;
@@ -92,12 +93,13 @@ PipelineInterestsAdaptive::checkRto()
         m_nTimeouts++;
         hasTimeout = true;
         enqueueForRetransmission(entry.first);
+        highTimeoutSeg = std::max(highTimeoutSeg, entry.first);
       }
     }
   }
 
   if (hasTimeout) {
-    recordTimeout();
+    recordTimeout(highTimeoutSeg);
     schedulePackets();
   }
 
@@ -310,7 +312,7 @@ PipelineInterestsAdaptive::handleNack(const Interest& interest, const lp::Nack& 
     case lp::NackReason::CONGESTION:
       // treated the same as timeout for now
       enqueueForRetransmission(segNo);
-      recordTimeout();
+      recordTimeout(segNo);
       schedulePackets();
       break;
     default:
@@ -327,16 +329,17 @@ PipelineInterestsAdaptive::handleLifetimeExpiration(const Interest& interest)
     return;
 
   m_nTimeouts++;
-  enqueueForRetransmission(getSegmentFromPacket(interest));
-  recordTimeout();
+  uint64_t segNo = getSegmentFromPacket(interest);
+  enqueueForRetransmission(segNo);
+  recordTimeout(segNo);
   schedulePackets();
 }
 
 void
-PipelineInterestsAdaptive::recordTimeout()
+PipelineInterestsAdaptive::recordTimeout(uint64_t segNo)
 {
-  if (m_options.disableCwa || m_highData > m_recPoint) {
-    // react to only one timeout per RTT (conservative window adaptation)
+  if (m_options.disableCwa || segNo > m_recPoint) {
+    // Outstanding interests at one timeout must not trigger another window decrease
     m_recPoint = m_highInterest;
 
     decreaseWindow();
